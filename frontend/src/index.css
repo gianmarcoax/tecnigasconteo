@@ -1,0 +1,110 @@
+@import "tailwindcss";
+
+/* ============================================================
+   Conteo de Inventario – Tecnigas
+   Sistema de diseño global
+   ============================================================ */
+
+/* ---------- Fuente Google ---------- */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+/* ---------- Variables CSS ---------- */
+:root {
+  --color-primario: #2563eb;
+  --color-primario-hover: #1d4ed8;
+  --color-exito: #10b981;
+  --color-exito-hover: #059669;
+  --color-peligro: #ef4444;
+  --color-peligro-hover: #dc2626;
+  --color-advertencia: #f59e0b;
+  --color-fondo: #f0f4f8;
+  --color-superficie: #ffffff;
+  --color-texto: #0f172a;
+  --color-texto-secundario: #64748b;
+  --color-borde: #e2e8f0;
+  --sombra-card: 0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
+  --sombra-elevada: 0 10px 25px rgba(0,0,0,.1), 0 4px 10px rgba(0,0,0,.05);
+  --radio: 12px;
+  --transicion: 200ms cubic-bezier(.4,0,.2,1);
+}
+
+/* ---------- Modo oscuro ---------- */
+.dark {
+  --color-primario: #3b82f6;
+  --color-primario-hover: #60a5fa;
+  --color-fondo: #0f172a;
+  --color-superficie: #1e293b;
+  --color-texto: #f1f5f9;
+  --color-texto-secundario: #94a3b8;
+  --color-borde: #334155;
+  --sombra-card: 0 1px 3px rgba(0,0,0,.3), 0 1px 2px rgba(0,0,0,.2);
+  --sombra-elevada: 0 10px 25px rgba(0,0,0,.4), 0 4px 10px rgba(0,0,0,.3);
+}
+
+/* ---------- Base ---------- */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background: var(--color-fondo);
+  color: var(--color-texto);
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  transition: background var(--transicion), color var(--transicion);
+}
+
+/* ---------- Scrollbar personalizada ---------- */
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-fondo);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-texto-secundario);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-texto);
+}
+
+/* ---------- Animaciones ---------- */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulso {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+}
+
+@keyframes deslizar-entrada {
+  from { opacity: 0; transform: translateX(-12px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  10%, 30%, 50%, 70%, 90% { transform: translateX(-4px); }
+  20%, 40%, 60%, 80% { transform: translateX(4px); }
+}
+
+.animar-entrada {
+  animation: fadeIn .35s ease-out;
+}
+
+.animar-fila {
+  animation: deslizar-entrada .3s ease-out;
+}
+
+.animar-shake {
+  animation: shake .5s ease-in-out;
+}
+
+.animar-pulso {
+  animation: pulso .3s ease-in-out;
+}
