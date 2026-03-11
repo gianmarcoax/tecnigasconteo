@@ -4,7 +4,7 @@
  */
 import { useState, useEffect, useMemo } from 'react';
 import DarkModeToggle from '../components/DarkModeToggle';
-import { obtenerCategorias, obtenerPorCategoria } from '../api/client';
+import { obtenerCategorias, obtenerPorCategoria, buscarGlobal, obtenerStock } from '../api/client';
 
 /** Clasifica ubicaciones en ALM / TDA igual que InventoryTable */
 function clasificarStock(stockPorUbicacion) {
@@ -32,9 +32,55 @@ export default function StockViewer({ onBack, dark, onToggleDark }) {
     const [productos, setProductos] = useState([]);
     const [cargandoProd, setCargandoProd] = useState(false);
     const [busqueda, setBusqueda] = useState('');
+    const [busquedaCategoria, setBusquedaCategoria] = useState('');
     const [ordenCol, setOrdenCol] = useState('total_stock'); // 'nombre'|'total_stock'|'codigo_interno'
     const [ordenDir, setOrdenDir] = useState('desc');
+    const [busquedaGlobal, setBusquedaGlobal] = useState('');
     const [error, setError] = useState(null);
+
+    // Estado para "Último Movimiento" en demanda
+    const [expandidoId, setExpandidoId] = useState(null);
+    const [detallesExtra, setDetallesExtra] = useState({});
+
+    /** Formatea la hora forzando UTC (Odoo devuelve sin Z) */
+    const formatearFecha = (fechaISO) => {
+        if (!fechaISO) return '—';
+        try {
+            const fechaFormat = fechaISO.includes('Z') ? fechaISO : fechaISO.replace(' ', 'T') + 'Z';
+            const fecha = new Date(fechaFormat);
+            return fecha.toLocaleString('es-PE', {
+                day: '2-digit', month: '2-digit', year: 'numeric',
+                hour: '2-digit', minute: '2-digit',
+            });
+        } catch {
+            return fechaISO;
+        }
+    };
+
+    const toggleExpandido = async (prodId) => {
+        if (expandidoId === prodId) {
+            setExpandidoId(null);
+            return;
+        }
+        setExpandidoId(prodId);
+
+        // Evitar doble llamada si ya fue cacheado
+        if (!detallesExtra[prodId] || (!detallesExtra[prodId].ultimo_movimiento && !detallesExtra[prodId].error)) {
+            setDetallesExtra(prev => ({ ...prev, [prodId]: { cargando: true } }));
+            try {
+                const extra = await obtenerStock(prodId);
+                setDetallesExtra(prev => ({
+                    ...prev,
+                    [prodId]: { cargando: false, ultimo_movimiento: extra.ultimo_movimiento }
+                }));
+            } catch {
+                setDetallesExtra(prev => ({
+                    ...prev,
+                    [prodId]: { cargando: false, error: 'Error' }
+                }));
+            }
+        }
+    };
 
     // Cargar categorías al montar
     useEffect(() => {
@@ -62,9 +108,38 @@ export default function StockViewer({ onBack, dark, onToggleDark }) {
         }
     };
 
+    // Filtrar categorías
+    const categoriasFiltradas = useMemo(() => {
+        if (!busquedaCategoria.trim()) return categorias;
+        const q = busquedaCategoria.toLowerCase();
+        return categorias.filter(c => c.complete_name.toLowerCase().includes(q));
+    }, [categorias, busquedaCategoria]);
+
     const handleCategoriaChange = (e) => {
+        setBusquedaGlobal('');
         setCategoriaId(e.target.value);
         cargarProductos(e.target.value);
+    };
+
+    const manejarBusquedaGlobal = async (e) => {
+        if (e) e.preventDefault();
+        const q = busquedaGlobal.trim();
+        if (!q) return;
+
+        setCargandoProd(true);
+        setProductos([]);
+        setError(null);
+        setCategoriaId(''); // Limpiar categoría para mostrar que es búsqueda global
+        setBusqueda(''); // Limpiar filtro local
+
+        try {
+            const res = await buscarGlobal(q);
+            setProductos(res.productos || []);
+        } catch {
+            setError('Error al realizar la búsqueda global');
+        } finally {
+            setCargandoProd(false);
+        }
     };
 
     // Filtrar y ordenar
@@ -154,58 +229,107 @@ export default function StockViewer({ onBack, dark, onToggleDark }) {
 
             <main className="max-w-7xl mx-auto px-4 py-6 space-y-5">
 
-                {/* SELECTOR + BUSQUEDA */}
-                <div className="flex flex-col sm:flex-row gap-3">
-                    {/* Selector categoría */}
+                {/* SELECTOR + BUSQUEDA GLOBAL */}
+                <div className="flex flex-col md:flex-row gap-4">
+
+                    {/* Busqueda Global */}
                     <div className="flex-1">
                         <label className="block text-xs font-semibold mb-1"
                             style={{ color: 'var(--color-texto-secundario)' }}>
-                            Categoría
+                            Búsqueda Global en Odoo
                         </label>
-                        <div className="relative">
-                            <select
-                                value={categoriaId}
-                                onChange={handleCategoriaChange}
-                                disabled={cargandoCats}
-                                className="w-full rounded-xl px-4 py-3 pr-10 text-sm font-medium outline-none appearance-none cursor-pointer transition-all"
+                        <form onSubmit={manejarBusquedaGlobal} className="relative">
+                            <input
+                                value={busquedaGlobal}
+                                onChange={e => setBusquedaGlobal(e.target.value)}
+                                placeholder="Escanear o escribir código/nombre y Enter..."
+                                className="w-full rounded-xl px-4 py-3 pr-12 text-sm outline-none"
                                 style={{
                                     background: 'var(--color-superficie)',
-                                    border: '1px solid var(--color-borde)',
+                                    border: '1px solid var(--color-primario)',
                                     color: 'var(--color-texto)',
+                                    boxShadow: '0 0 0 2px rgba(37,99,235,.05)'
                                 }}
+                            />
+                            <button
+                                type="submit"
+                                disabled={cargandoProd || !busquedaGlobal.trim()}
+                                className="absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-lg cursor-pointer transition-all hover:scale-105 disabled:opacity-50"
+                                style={{ background: 'var(--color-primario)', color: '#fff' }}
                             >
-                                <option value="">
-                                    {cargandoCats ? 'Cargando categorías...' : '— Selecciona una categoría —'}
-                                </option>
-                                {categorias.map(c => (
-                                    <option key={c.id} value={c.id}>{c.complete_name}</option>
-                                ))}
-                            </select>
-                            <span className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none"
-                                style={{ color: 'var(--color-texto-secundario)' }}>▾</span>
-                        </div>
+                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                                </svg>
+                            </button>
+                        </form>
                     </div>
 
-                    {/* Busqueda */}
-                    {productos.length > 0 && (
-                        <div className="flex-1">
-                            <label className="block text-xs font-semibold mb-1"
-                                style={{ color: 'var(--color-texto-secundario)' }}>
-                                Buscar
-                            </label>
+                    {/* Selector categoría */}
+                    <div className="flex-1 relative">
+                        <label className="block text-xs font-semibold mb-1"
+                            style={{ color: 'var(--color-texto-secundario)' }}>
+                            Filtrar por Categoría
+                        </label>
+                        <div className="relative">
                             <input
-                                value={busqueda}
-                                onChange={e => setBusqueda(e.target.value)}
-                                placeholder="Nombre, código interno, barcode..."
-                                className="w-full rounded-xl px-4 py-3 text-sm outline-none"
+                                value={busquedaCategoria}
+                                onChange={e => { setBusquedaCategoria(e.target.value); setCategoriaId(''); }}
+                                placeholder={cargandoCats ? 'Cargando categorías...' : 'Buscar categoría...'}
+                                disabled={cargandoCats}
+                                className="w-full rounded-xl px-4 py-3 text-sm outline-none transition-all"
                                 style={{
                                     background: 'var(--color-superficie)',
-                                    border: '1px solid var(--color-borde)',
+                                    border: `1px solid ${categoriaId ? 'var(--color-exito)' : 'var(--color-borde)'}`,
                                     color: 'var(--color-texto)',
                                 }}
                             />
+                            {categoriaId && (
+                                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs px-2 py-0.5 rounded-full font-medium"
+                                    style={{ background: 'var(--color-exito)', color: '#fff' }}>✓</span>
+                            )}
                         </div>
-                    )}
+                        {/* Lista desplegable en tiempo real */}
+                        {busquedaCategoria.trim() && !categoriaId && categoriasFiltradas.length > 0 && (
+                            <div className="absolute z-30 left-0 right-0 mt-1 rounded-xl overflow-auto shadow-2xl"
+                                style={{
+                                    background: 'var(--color-superficie)',
+                                    border: '1px solid var(--color-borde)',
+                                    maxHeight: '220px',
+                                }}>
+                                {categoriasFiltradas.slice(0, 25).map(c => (
+                                    <button
+                                        key={c.id}
+                                        type="button"
+                                        onMouseDown={(e) => e.preventDefault()}
+                                        onClick={() => {
+                                            setBusquedaCategoria(c.complete_name);
+                                            setCategoriaId(String(c.id));
+                                            cargarProductos(c.id);
+                                        }}
+                                        className="w-full text-left px-4 py-2.5 text-sm transition-all"
+                                        style={{
+                                            color: 'var(--color-texto)',
+                                            borderBottom: '1px solid var(--color-borde)',
+                                        }}
+                                        onMouseEnter={e => e.currentTarget.style.background = 'var(--color-fondo)'}
+                                        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                                    >
+                                        {c.complete_name}
+                                    </button>
+                                ))}
+                                {categoriasFiltradas.length > 25 && (
+                                    <p className="text-center text-xs py-2" style={{ color: 'var(--color-texto-secundario)' }}>
+                                        Escribe más para filtrar ({categoriasFiltradas.length} resultados)
+                                    </p>
+                                )}
+                            </div>
+                        )}
+                        {busquedaCategoria.trim() && !categoriaId && categoriasFiltradas.length === 0 && (
+                            <p className="text-xs mt-1.5" style={{ color: 'var(--color-texto-secundario)' }}>
+                                Sin resultados para "{busquedaCategoria}"
+                            </p>
+                        )}
+                    </div>
 
                     {/* Botón refrescar */}
                     {categoriaId && (
@@ -224,7 +348,8 @@ export default function StockViewer({ onBack, dark, onToggleDark }) {
                             </button>
                         </div>
                     )}
-                </div>
+
+                </div>{/* fin: flex toolbar row */}
 
                 {/* ERROR */}
                 {error && (
@@ -258,6 +383,9 @@ export default function StockViewer({ onBack, dark, onToggleDark }) {
                                         onClick={() => toggleOrden('codigo_interno')}>
                                         Código{flecha('codigo_interno')}
                                     </th>
+                                    <th className="text-left px-4 py-3 font-semibold">
+                                        Precio
+                                    </th>
                                     <th className="text-left px-4 py-3 font-semibold cursor-pointer select-none hover:opacity-80"
                                         onClick={() => toggleOrden('nombre')}>
                                         Producto{flecha('nombre')}
@@ -290,6 +418,10 @@ export default function StockViewer({ onBack, dark, onToggleDark }) {
                                                 style={{ color: 'var(--color-texto-secundario)' }}>
                                                 {prod.codigo_interno || prod.barcode || '—'}
                                             </td>
+                                            <td className="px-4 py-3 font-medium whitespace-nowrap"
+                                                style={{ color: 'var(--color-exito)' }}>
+                                                S/ {prod.precio?.toFixed(2) || '0.00'}
+                                            </td>
                                             <td className="px-4 py-3 font-medium"
                                                 style={{ color: 'var(--color-texto)' }}>
                                                 {prod.nombre}
@@ -303,14 +435,51 @@ export default function StockViewer({ onBack, dark, onToggleDark }) {
                                                 {st.tienda ?? '—'}
                                             </td>
                                             <td className="px-4 py-3 text-center">
-                                                <span className="px-2 py-0.5 rounded-full text-xs font-bold"
-                                                    style={{
-                                                        background: noStock ? 'var(--color-fondo)' : 'rgba(37,99,235,.12)',
-                                                        color: noStock ? 'var(--color-texto-secundario)' : 'var(--color-primario)',
-                                                        border: '1px solid var(--color-borde)',
-                                                    }}>
-                                                    {st.total}
-                                                </span>
+                                                <div className="relative inline-block">
+                                                    <button
+                                                        onClick={() => toggleExpandido(prod.id)}
+                                                        className="px-2 py-0.5 rounded-full text-xs font-bold cursor-pointer transition-all hover:scale-105"
+                                                        style={{
+                                                            background: noStock ? 'var(--color-fondo)' : 'rgba(37,99,235,.12)',
+                                                            color: noStock ? 'var(--color-texto-secundario)' : 'var(--color-primario)',
+                                                            border: '1px solid var(--color-borde)',
+                                                        }}
+                                                        title="Ver último movimiento"
+                                                    >
+                                                        {st.total}
+                                                    </button>
+
+                                                    {expandidoId === prod.id && (
+                                                        <div className="absolute z-30 right-0 mt-2 w-48 rounded-xl shadow-2xl p-3 text-left animar-entrada"
+                                                            style={{
+                                                                background: 'var(--color-superficie)',
+                                                                border: '1px solid var(--color-borde)',
+                                                            }}>
+                                                            <p className="text-xs font-bold mb-1" style={{ color: 'var(--color-texto)' }}>
+                                                                Detalle Movimiento
+                                                            </p>
+                                                            {detallesExtra[prod.id]?.cargando && (
+                                                                <span className="text-xs italic" style={{ color: 'var(--color-texto-secundario)' }}>Cargando...</span>
+                                                            )}
+                                                            {!detallesExtra[prod.id]?.cargando && detallesExtra[prod.id]?.ultimo_movimiento && (
+                                                                <div className="text-xs mt-1" style={{ color: 'var(--color-texto-secundario)' }}>
+                                                                    <span className="font-semibold" style={{ color: 'var(--color-texto)' }}>Últ. modificación:</span><br />
+                                                                    {formatearFecha(detallesExtra[prod.id].ultimo_movimiento)}
+                                                                </div>
+                                                            )}
+                                                            {!detallesExtra[prod.id]?.cargando && !detallesExtra[prod.id]?.ultimo_movimiento && !detallesExtra[prod.id]?.error && (
+                                                                <div className="text-xs mt-1" style={{ color: 'var(--color-texto-secundario)' }}>
+                                                                    Sin movimientos recientes.
+                                                                </div>
+                                                            )}
+                                                            {!detallesExtra[prod.id]?.cargando && detallesExtra[prod.id]?.error && (
+                                                                <div className="text-xs mt-1 text-red-500">
+                                                                    Error al consultar fecha.
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                </div>
                                             </td>
                                         </tr>
                                     );
@@ -328,14 +497,14 @@ export default function StockViewer({ onBack, dark, onToggleDark }) {
                     </div>
                 )}
 
-                {/* PLACEHOLDER sin categoría */}
-                {!categoriaId && !cargandoCats && (
+                {/* PLACEHOLDER inicial */}
+                {!categoriaId && !cargandoCats && productos.length === 0 && !busquedaGlobal && !cargandoProd && !error && (
                     <div className="text-center py-20" style={{ color: 'var(--color-texto-secundario)' }}>
                         <svg className="w-16 h-16 mx-auto mb-4 opacity-25" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
                             <path strokeLinecap="round" strokeLinejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
                         </svg>
-                        <p className="text-xl font-semibold mb-1">Selecciona una categoría</p>
-                        <p className="text-sm">para ver el stock de sus productos</p>
+                        <p className="text-xl font-semibold mb-1">Busca un producto o selecciona una categoría</p>
+                        <p className="text-sm">para ver el stock en tiempo real</p>
                     </div>
                 )}
             </main>

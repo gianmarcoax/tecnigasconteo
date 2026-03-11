@@ -10,6 +10,8 @@ from typing import Optional
 from fastapi import APIRouter, File, UploadFile, HTTPException
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
+from pydantic import BaseModel
+from typing import List
 
 from models.schemas import Producto, ProductoRespuesta
 
@@ -48,6 +50,7 @@ async def buscar_producto(codigo_barras: str):
                 codigo_barras=resultado.get("barcode", codigo_barras),
                 nombre=resultado.get("name", "Sin nombre"),
                 cantidad=0,
+                precio=resultado.get("precio", 0.0),
             )
             return ProductoRespuesta(
                 encontrado=True,
@@ -62,6 +65,21 @@ async def buscar_producto(codigo_barras: str):
         logger.error("Error buscando producto: %s", e)
         raise HTTPException(status_code=500, detail=f"Error al buscar producto: {str(e)}")
 
+class BusquedaMasivaRequest(BaseModel):
+    codigos: List[str]
+
+@router.post("/buscar-masivo")
+async def buscar_masivo(req: BusquedaMasivaRequest):
+    """Busca múltiples productos en Odoo por sus códigos de barras de una sola vez."""
+    if not _odoo_client:
+        raise HTTPException(status_code=503, detail="Cliente Odoo no configurado")
+
+    try:
+        productos = _odoo_client.buscar_productos_por_codigos(req.codigos)
+        return {"exito": True, "productos": productos}
+    except Exception as e:
+        logger.error("Error en búsqueda masiva: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/stock")
 async def obtener_stock(id_odoo: int):
@@ -83,6 +101,27 @@ async def obtener_stock(id_odoo: int):
     except Exception as e:
         logger.error("Error obteniendo stock: %s", e)
         raise HTTPException(status_code=500, detail=f"Error al obtener stock: {str(e)}")
+
+
+@router.post("/stock-masivo")
+async def obtener_stock_masivo(request: dict):
+    """
+    Obtiene la cantidad a la mano masiva para una lista de product_ids.
+    Cuerpo esperado: {"ids_odoo": [123, 456]}
+    """
+    if not _odoo_client:
+        raise HTTPException(status_code=503, detail="Cliente Odoo no configurado")
+
+    ids_odoo = request.get("ids_odoo", [])
+    if not ids_odoo:
+        return {"resultados": {}}
+
+    try:
+        stock_map = _odoo_client.obtener_stock_masivo(ids_odoo)
+        return {"resultados": stock_map}
+    except Exception as e:
+        logger.error("Error obteniendo stock masivo: %s", e)
+        raise HTTPException(status_code=500, detail=f"Error al obtener stock masivo: {str(e)}")
 
 
 @router.get("/categorias")
@@ -110,6 +149,21 @@ async def obtener_por_categoria(categoria_id: int):
         return {"categoria_id": categoria_id, "productos": productos, "total": len(productos)}
     except Exception as e:
         logger.error("Error obteniendo productos por categoría: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/buscar-global")
+async def buscar_global(q: str):
+    """
+    Busca productos en todo el almacén por nombre o código y devuelve su stock.
+    """
+    if not _odoo_client:
+        raise HTTPException(status_code=503, detail="Cliente Odoo no configurado")
+    try:
+        productos = _odoo_client.buscar_productos_global(q)
+        return {"query": q, "productos": productos, "total": len(productos)}
+    except Exception as e:
+        logger.error("Error en búsqueda global: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 

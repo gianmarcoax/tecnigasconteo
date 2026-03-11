@@ -6,11 +6,13 @@ import { useState, useEffect, useCallback } from 'react';
 import LocationSelector from './pages/LocationSelector';
 import Dashboard from './pages/Dashboard';
 import StockViewer from './pages/StockViewer';
+import NegativeStockViewer from './pages/NegativeStockViewer';
 import './index.css';
 
 export default function App() {
   const [ubicacion, setUbicacion] = useState(null);
   const [vistaStock, setVistaStock] = useState(false);
+  const [vistaNegativos, setVistaNegativos] = useState(false);
   const [dark, setDark] = useState(() => {
     // Recuperar preferencia guardada
     const guardado = localStorage.getItem('tema-oscuro');
@@ -34,6 +36,7 @@ export default function App() {
   const volverASeleccion = useCallback(() => {
     setUbicacion(null);
     setVistaStock(false);
+    setVistaNegativos(false);
   }, []);
 
   // Visualizador de stock
@@ -47,9 +50,23 @@ export default function App() {
     );
   }
 
+  if (vistaNegativos) {
+    return (
+      <NegativeStockViewer
+        onBack={() => setVistaNegativos(false)}
+        dark={dark}
+        onToggleDark={alternarDark}
+      />
+    );
+  }
+
   // Si no hay ubicación seleccionada, mostrar selector
   if (!ubicacion) {
-    return <LocationSelector onSelect={seleccionarUbicacion} onVerStock={() => setVistaStock(true)} />;
+    return <LocationSelector
+      onSelect={seleccionarUbicacion}
+      onVerStock={() => setVistaStock(true)}
+      onVerNegativos={() => setVistaNegativos(true)}
+    />;
   }
 
   // Dashboard principal

@@ -99,27 +99,38 @@ async def enviar_inventario(request: EnviarInventarioRequest):
             detail=f"No se encontró ninguna ubicación interna en Odoo",
         )
 
+    # Preparar items para el proceso masivo
+    items_a_procesar = [
+        {"id_odoo": item.id_odoo, "cantidad": float(item.cantidad)}
+        for item in request.items if item.cantidad > 0
+    ]
+
+    if not items_a_procesar:
+        return EnviarInventarioRespuesta(
+            exito=False,
+            mensaje="No hay productos con cantidad > 0 para enviar",
+            items_enviados=0,
+            errores=["Todas las cantidades son 0 o menores"]
+        )
+
     enviados = 0
     errores: list[str] = []
 
-    for item in request.items:
-        if item.cantidad <= 0:
-            continue
+    for item_data in items_a_procesar:
         try:
-            _odoo_client.actualizar_inventario(
-                product_id=item.id_odoo,
-                cantidad=float(item.cantidad),
+            _odoo_client.actualizar_inventario_por_item(
+                product_id=item_data["id_odoo"],
+                cantidad=item_data["cantidad"],
                 location_id=location_id,
             )
             enviados += 1
-            logger.info("✓ Enviado: %s (cantidad: %d)", item.nombre, item.cantidad)
         except Exception as e:
-            error_msg = f"Error con {item.nombre} ({item.codigo_barras}): {str(e)}"
-            errores.append(error_msg)
-            logger.error(error_msg)
+            msg = f"Error con producto ID {item_data['id_odoo']}: {str(e)}"
+            errores.append(msg)
+            logger.error(msg)
 
     exito = enviados > 0 and len(errores) == 0
-    mensaje = f"Se actualizaron {enviados} de {len(request.items)} productos"
+    mensaje = f"Se actualizaron {enviados} de {len(items_a_procesar)} productos"
     if errores:
         mensaje += f" ({len(errores)} errores)"
 
@@ -129,3 +140,18 @@ async def enviar_inventario(request: EnviarInventarioRequest):
         items_enviados=enviados,
         errores=errores,
     )
+
+@router.get("/negativos")
+async def obtener_negativos():
+    """
+    Obtiene la lista de todos los productos que tengan stock negativo en ubicaciones internas.
+    """
+    if not _odoo_client:
+        raise HTTPException(status_code=503, detail="Cliente Odoo no configurado")
+
+    try:
+        productos = _odoo_client.obtener_productos_stock_negativo()
+        return {"exito": True, "productos": productos}
+    except Exception as e:
+        logger.error("Error obteniendo productos con stock negativo: %s", e)
+        raise HTTPException(status_code=500, detail=f"Error al obtener stock negativo: {str(e)}")

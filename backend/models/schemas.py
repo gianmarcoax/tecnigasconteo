@@ -13,6 +13,7 @@ class Producto(BaseModel):
     codigo_barras: str = Field(..., description="Código de barras del producto")
     nombre: str = Field(..., description="Nombre del producto")
     cantidad: int = Field(0, ge=0, description="Cantidad contada")
+    precio: float = Field(0.0, description="Precio de venta del producto")
 
 
 class ProductoRespuesta(BaseModel):

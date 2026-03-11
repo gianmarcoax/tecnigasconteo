@@ -22,15 +22,23 @@ export async function buscarProducto(codigoBarras) {
 }
 
 /**
- * Envía el inventario contado a Odoo.
- * @param {string} ubicacion  - 'almacen' | 'tienda'
- * @param {Array}  items      - [{id_odoo, codigo_barras, nombre, cantidad}]
+ * Enviar el inventario contado a Odoo.
+ * @param {string} ubicacion - 'almacen' o 'tienda'
+ * @param {Array} items - [{id_odoo, cantidad}]
  */
 export async function enviarInventario(ubicacion, items) {
-    // Timeout largo: enviar muchos productos a Odoo puede tardar bastante
-    const { data } = await api.post('/inventario/enviar', { ubicacion, items }, {
-        timeout: 120000, // 2 minutos
-    });
+    const { data } = await api.post('/inventario/enviar', {
+        ubicacion,
+        items
+    }, { timeout: 60000 }); // Más tiempo por si son muchos
+    return data;
+}
+
+/**
+ * Obtener todos los productos con stock negativo
+ */
+export async function obtenerStockNegativo() {
+    const { data } = await api.get('/inventario/negativos', { timeout: 60000 });
     return data;
 }
 
@@ -89,6 +97,38 @@ export async function exportarExcel(items) {
 export async function obtenerStock(idOdoo) {
     const { data } = await api.get('/productos/stock', {
         params: { id_odoo: idOdoo },
+    });
+    return data;
+}
+
+/**
+ * Obtiene el stock a la mano de una lista de IDs de forma masiva (optimización).
+ * @param {number[]} idsOdoo
+ */
+export async function obtenerStockMasivo(idsOdoo) {
+    if (!idsOdoo || idsOdoo.length === 0) return {};
+    const { data } = await api.post('/productos/stock-masivo', {
+        ids_odoo: idsOdoo
+    });
+    return data.resultados || {};
+}
+
+export async function buscarGlobal(query) {
+    const { data } = await api.get('/productos/buscar-global', {
+        params: { q: query },
+        timeout: 30000,
+    });
+    return data;
+}
+
+/**
+ * Busca múltiples productos por sus códigos de barras de una sola vez.
+ * @param {string[]} codigos
+ */
+export async function buscarMasivo(codigos) {
+    if (!codigos || codigos.length === 0) return { exito: true, productos: [] };
+    const { data } = await api.post('/productos/buscar-masivo', {
+        codigos: codigos
     });
     return data;
 }

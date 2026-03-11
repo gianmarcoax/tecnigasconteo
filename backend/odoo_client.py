@@ -99,7 +99,7 @@ class OdooClient:
             "product.product",
             "search_read",
             [[["barcode", "=", codigo_barras]]],
-            {"fields": ["id", "barcode", "name", "default_code"], "limit": 1},
+            {"fields": ["id", "barcode", "name", "default_code", "lst_price"], "limit": 1},
         )
         if resultados:
             prod = resultados[0]
@@ -109,15 +109,114 @@ class OdooClient:
                 "barcode": prod.get("barcode", codigo_barras),
                 "name": prod.get("name", ""),
                 "default_code": prod.get("default_code", ""),
+                "precio": prod.get("lst_price") or 0.0,
             }
         logger.warning("Producto NO encontrado para código: %s", codigo_barras)
         return None
+
+    def buscar_productos_por_codigos(self, codigos_barras: list[str]) -> list[dict]:
+        """
+        Busca múltiples productos por sus códigos de barras en Odoo.
+        Devuelve una lista de diccionarios con {id_odoo, codigo_barras, nombre, precio}.
+        """
+        if not codigos_barras:
+            return []
+
+        logger.info("Buscando %d productos por código de barras de forma masiva", len(codigos_barras))
+        resultados = self._ejecutar(
+            "product.product",
+            "search_read",
+            [[["barcode", "in", codigos_barras]]],
+            {"fields": ["id", "barcode", "name", "default_code", "lst_price", "list_price"]},
+        )
+
+        productos = []
+        if resultados:
+            for prod in resultados:
+                precio = float(prod.get("lst_price") or prod.get("list_price") or 0.0)
+                productos.append({
+                    "id_odoo": prod["id"],
+                    "codigo_barras": prod.get("barcode", ""),
+                    "nombre": prod.get("name", ""),
+                    "default_code": prod.get("default_code", ""),
+                    "precio": precio,
+                })
+        
+        logger.info("Búsqueda masiva completada: encontrados %d de %d", len(productos), len(codigos_barras))
+        return productos
 
     # ------------------------------------------------------------------ #
     #  Inventario                                                          #
     # ------------------------------------------------------------------ #
 
-    def actualizar_inventario(
+    def actualizar_inventario_masivo(
+        self,
+        items: list[dict],
+        location_id: int,
+    ) -> dict:
+        """
+        Actualiza múltiples productos a la vez en Odoo.
+        items: list of {"id_odoo": int, "cantidad": float}
+        """
+        logger.info("Iniciando actualización masiva para %d items en ubicación %d", len(items), location_id)
+        product_ids = [item["id_odoo"] for item in items]
+        counts = {item["id_odoo"]: item["cantidad"] for item in items}
+
+        try:
+            # 1. Buscar quants existentes para estos productos en esta ubicación
+            quants = self._ejecutar(
+                "stock.quant",
+                "search_read",
+                [[
+                    ["product_id", "in", product_ids],
+                    ["location_id", "=", location_id],
+                ]],
+                {"fields": ["id", "product_id", "quantity"]},
+            )
+
+            quant_map = {}
+            for q in quants:
+                pid = q["product_id"][0] if isinstance(q["product_id"], (list, tuple)) else q["product_id"]
+                quant_map[pid] = {"id": q["id"], "quantity": q["quantity"]}
+
+            ids_a_aplicar = []
+
+            # 2. Preparar actualizaciones y creaciones
+            for pid, qty in counts.items():
+                if pid in quant_map:
+                    # Actualizar existente
+                    quant_id = quant_map[pid]["id"]
+                    nueva_cantidad = float(quant_map[pid]["quantity"]) + float(qty)
+                    self._ejecutar(
+                        "stock.quant",
+                        "write",
+                        [[quant_id], {"inventory_quantity": nueva_cantidad}],
+                    )
+                    ids_a_aplicar.append(quant_id)
+                else:
+                    # Crear nuevo
+                    quant_id = self._ejecutar(
+                        "stock.quant",
+                        "create",
+                        [{"product_id": pid, "location_id": location_id, "inventory_quantity": float(qty)}],
+                    )
+                    ids_a_aplicar.append(quant_id)
+
+            # 3. Aplicar todo en un solo paso
+            if ids_a_aplicar:
+                self._ejecutar(
+                    "stock.quant",
+                    "action_apply_inventory",
+                    [ids_a_aplicar],
+                )
+
+            return {"exito": True, "procesados": len(ids_a_aplicar)}
+
+        except Exception as e:
+            logger.error("Error en actualización masiva: %s", e)
+            raise e
+
+    def actualizar_inventario_por_item(
         self,
         product_id: int,
         cantidad: float,
@@ -140,30 +239,29 @@ class OdooClient:
                     ["product_id", "=", product_id],
                     ["location_id", "=", location_id],
                 ]],
-                {"fields": ["id", "inventory_quantity"], "limit": 1},
+                {"fields": ["id", "quantity"], "limit": 1},
             )
 
             if quants:
                 quant_id = quants[0]["id"]
-                # Escribir la cantidad de inventario
+                stock_actual = float(quants[0].get("quantity", 0.0))
+                nueva_cantidad = stock_actual + cantidad
                 self._ejecutar(
                     "stock.quant",
                     "write",
-                    [[quant_id], {"inventory_quantity": cantidad}],
+                    [[quant_id], {"inventory_quantity": nueva_cantidad}],
                 )
             else:
-                # Crear quant nuevo
                 quant_id = self._ejecutar(
                     "stock.quant",
                     "create",
                     [{"product_id": product_id, "location_id": location_id, "inventory_quantity": cantidad}],
                 )
 
-            # Aplicar el ajuste de inventario
             self._ejecutar(
                 "stock.quant",
                 "action_apply_inventory",
-                [[quant_id if isinstance(quant_id, int) else quant_id]],
+                [[quant_id]],
             )
 
             logger.info("Inventario actualizado correctamente para producto %d", product_id)
@@ -220,6 +318,42 @@ class OdooClient:
         except Exception as e:
             logger.error("Error obteniendo stock a la mano: %s", e)
             return []
+
+    def obtener_stock_masivo(self, product_ids: list[int]) -> dict[int, list[dict]]:
+        """
+        Consulta de forma masiva el stock a la mano de una lista de IDs de productos.
+        Retorna un diccionario: {product_id: [{location_id, location_name, quantity}]}
+        """
+        if not product_ids:
+            return {}
+            
+        logger.info("Consultando stock a la mano masivo para %d productos", len(product_ids))
+        try:
+            quants = self._ejecutar(
+                "stock.quant",
+                "search_read",
+                [[
+                    ["product_id", "in", product_ids],
+                    ["location_id.usage", "=", "internal"],
+                ]],
+                {"fields": ["product_id", "location_id", "quantity"], "limit": 5000},
+            )
+            
+            stock_map = {}
+            for q in (quants or []):
+                pid = q["product_id"][0] if isinstance(q["product_id"], (list, tuple)) else q["product_id"]
+                loc = q.get("location_id")
+                entry = {
+                    "location_id": loc[0] if isinstance(loc, (list, tuple)) else loc,
+                    "location_name": loc[1] if isinstance(loc, (list, tuple)) else str(loc),
+                    "quantity": q.get("quantity", 0),
+                }
+                stock_map.setdefault(pid, []).append(entry)
+                
+            return stock_map
+        except Exception as e:
+            logger.error("Error obteniendo stock masivo: %s", e)
+            return {}
 
     def obtener_ultimo_movimiento(self, product_id: int) -> Optional[str]:
         """
@@ -289,11 +423,11 @@ class OdooClient:
                 "product.product",
                 "search_read",
                 [[["product_tmpl_id", "in", template_ids]]],
-                {"fields": ["id", "name", "default_code", "barcode", "product_tmpl_id"], "limit": 1000},
+                {"fields": ["id", "name", "default_code", "barcode", "product_tmpl_id", "lst_price"], "limit": 1000},
             )
             if not productos:
                 return []
-
+            
             product_ids = [p["id"] for p in productos]
 
             # 3. Obtener stock.quant (stock a la mano) de esos productos
@@ -330,6 +464,7 @@ class OdooClient:
                     "nombre": p.get("name", ""),
                     "codigo_interno": p.get("default_code") or "",
                     "barcode": p.get("barcode") or "",
+                    "precio": p.get("lst_price") or 0.0,
                     "stock_por_ubicacion": stock_locs,
                     "total_stock": total,
                 })
@@ -340,4 +475,144 @@ class OdooClient:
 
         except Exception as e:
             logger.error("Error obteniendo productos por categoría: %s", e)
+            return []
+
+    def obtener_productos_stock_negativo(self) -> list[dict]:
+        """
+        Devuelve todos los productos que tengan stock menor a 0 en ubicaciones internas.
+        Retorna [{id_odoo, nombre, codigo_interno, codigo_barras, precio, stock_por_ubicacion, total_stock}]
+        """
+        logger.info("Consultando productos con stock negativo")
+        try:
+            # 1. Buscar quants con cantidad < 0 en ubicaciones internas
+            quants = self._ejecutar(
+                "stock.quant",
+                "search_read",
+                [[
+                    ["quantity", "<", 0],
+                    ["location_id.usage", "=", "internal"],
+                ]],
+                {"fields": ["product_id", "location_id", "quantity"], "limit": 5000},
+            )
+
+            if not quants:
+                return []
+
+            # Agrupar quants por producto
+            stock_map: dict[int, list] = {}
+            for q in quants:
+                pid = q["product_id"][0] if isinstance(q["product_id"], (list, tuple)) else q["product_id"]
+                loc = q.get("location_id")
+                entry = {
+                    "location_id": loc[0] if isinstance(loc, (list, tuple)) else loc,
+                    "location_name": loc[1] if isinstance(loc, (list, tuple)) else str(loc),
+                    "quantity": q.get("quantity", 0),
+                }
+                stock_map.setdefault(pid, []).append(entry)
+
+            product_ids = list(stock_map.keys())
+
+            # 2. Obtener la información de los productos (product.product)
+            productos = self._ejecutar(
+                "product.product",
+                "search_read",
+                [[["id", "in", product_ids]]],
+                {"fields": ["id", "name", "default_code", "barcode", "lst_price", "list_price"]},
+            )
+
+            # 3. Construir respuesta final
+            resultado = []
+            for p in (productos or []):
+                stock_list = stock_map.get(p["id"], [])
+                # Filtrar si solo interesan los negativos, pero devolvemos lo que trajo la query (ya filtró quantity < 0)
+                total_stock = sum(s["quantity"] for s in stock_list)
+                resultado.append({
+                    "id_odoo": p["id"],
+                    "nombre": p["name"],
+                    "codigo_interno": p.get("default_code", "") or "",
+                    "codigo_barras": p.get("barcode", "") or "",
+                    "precio": p.get("list_price") or p.get("lst_price") or 0.0,
+                    "stock_por_ubicacion": stock_list,
+                    "total_stock": total_stock,
+                })
+
+            # Ordenar por nombre
+            resultado.sort(key=lambda x: x["nombre"])
+            return resultado
+
+        except Exception as e:
+            logger.error("Error obteniendo productos en negativo: %s", e)
+            return []
+
+    def buscar_productos_global(self, query: str) -> list[dict]:
+        """
+        Busca productos en todo Odoo por nombre, código interno o código de barras,
+        y devuelve su stock a la mano en ubicaciones internas.
+        Retorna [{id, name, default_code, barcode, stock_por_ubicacion, total_stock}]
+        """
+        logger.info("Buscando productos globales con query: %s", query)
+        try:
+            domain = [
+                "|", "|",
+                ("name", "ilike", query),
+                ("default_code", "ilike", query),
+                ("barcode", "ilike", query)
+            ]
+            
+            productos = self._ejecutar(
+                "product.product",
+                "search_read",
+                [domain],
+                {"fields": ["id", "name", "default_code", "barcode", "lst_price"], "limit": 100},
+            )
+            if not productos:
+                return []
+
+            product_ids = [p["id"] for p in productos]
+
+            # Obtener stock.quant (stock a la mano) de esos productos
+            quants = self._ejecutar(
+                "stock.quant",
+                "search_read",
+                [[
+                    ["product_id", "in", product_ids],
+                    ["location_id.usage", "=", "internal"],
+                ]],
+                {"fields": ["product_id", "location_id", "quantity"], "limit": 2000},
+            )
+
+            # Agrupar quants por producto
+            stock_map: dict[int, list] = {}
+            for q in (quants or []):
+                pid = q["product_id"][0] if isinstance(q["product_id"], (list, tuple)) else q["product_id"]
+                loc = q.get("location_id")
+                entry = {
+                    "location_id": loc[0] if isinstance(loc, (list, tuple)) else loc,
+                    "location_name": loc[1] if isinstance(loc, (list, tuple)) else str(loc),
+                    "quantity": q.get("quantity", 0),
+                }
+                stock_map.setdefault(pid, []).append(entry)
+
+            # Construir resultado
+            resultado = []
+            for p in productos:
+                pid = p["id"]
+                stock_locs = stock_map.get(pid, [])
+                total = sum(s["quantity"] for s in stock_locs)
+                resultado.append({
+                    "id": pid,
+                    "nombre": p.get("name", ""),
+                    "codigo_interno": p.get("default_code") or "",
+                    "barcode": p.get("barcode") or "",
+                    "precio": p.get("lst_price") or 0.0,
+                    "stock_por_ubicacion": stock_locs,
+                    "total_stock": total,
+                })
+
+            # Ordenar: mayor stock primero
+            resultado.sort(key=lambda x: x["total_stock"], reverse=True)
+            return resultado
+
+        except Exception as e:
+            logger.error("Error en búsqueda global de productos: %s", e)
             return []
