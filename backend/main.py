@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 #  Variables de entorno                                                #
 # ------------------------------------------------------------------ #
 
-load_dotenv()
+load_dotenv(".env")
 
 ODOO_URL = os.getenv("ODOO_URL", "")
 ODOO_DB = os.getenv("ODOO_DB", "")
