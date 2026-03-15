@@ -32,10 +32,10 @@ logger = logging.getLogger(__name__)
 
 load_dotenv(".env")
 
-ODOO_URL = os.getenv("ODOO_URL", "")
-ODOO_DB = os.getenv("ODOO_DB", "")
-ODOO_USER = os.getenv("ODOO_USER", "")
-ODOO_API_KEY = os.getenv("ODOO_API_KEY", "")
+ODOO_URL = os.getenv("ODOO_URL", "https://tecnigass.pe")
+ODOO_DB = os.getenv("ODOO_DB", "db_tecnigas")
+ODOO_USER = os.getenv("ODOO_USER", "coadmin@gmail.com")
+ODOO_API_KEY = os.getenv("ODOO_API_KEY", "2dab421e59ee24e0b4c81f77717250ddd93f8a83")
 
 
 # ------------------------------------------------------------------ #
